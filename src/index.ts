@@ -23,6 +23,7 @@ export { Provable } from './lib/provable.js';
 export { Circuit, Keypair, public_, circuitMain } from './lib/circuit.js';
 export { UInt32, UInt64, Int64, Sign } from './lib/int.js';
 export { Types } from './bindings/mina-transaction/types.js';
+export { ForeignGroup } from './lib/elliptic-curve.js';
 
 export * as Mina from './lib/mina.js';
 export type { DeployArgs } from './lib/zkapp.js';
