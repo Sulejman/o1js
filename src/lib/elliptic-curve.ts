@@ -1,13 +1,18 @@
 import { Snarky } from '../snarky.js';
-import { ForeignAffine, ForeignField, ForeignFieldVar, createForeignField } from './foreign-field.js';
+import { ForeignAffine, ForeignFieldVar, createForeignField } from './foreign-field.js';
 import { Field } from "./field.js";
+import { Provable } from "./provable.js";
+import { Bool } from "./core.js";
 
-export { EllipticCurve, ForeignGroup }
+export { EllipticCurve, ForeignGroup, ForeignField }
 
 type EllipticCurve = [a: string, b: string, modulus: string, genX: string, genY: string, order: string];
-class ForeignGroup {
-    static curve: EllipticCurve
 
+const curve: EllipticCurve = ["0x0", "0x2", "0x2523648240000001BA344D80000000086121000000000013A700000000000013", "0x2523648240000001BA344D80000000086121000000000013A700000000000012", "0x1", "0x2523648240000001BA344D8000000007FF9F800000000010A10000000000000D"];
+
+class ForeignField extends createForeignField(BigInt(curve[2])) { }
+
+class ForeignGroup {
     x: ForeignField
     y: ForeignField
 
@@ -16,45 +21,125 @@ class ForeignGroup {
         this.y = y;
     }
 
-    add(other: ForeignGroup) {
-        let left: ForeignAffine = [this.x.value, this.y.value];
-        let right: ForeignAffine = [other.x.value, other.y.value];
-        let [x, y] = Snarky.foreignGroup.add(left, right, ForeignGroup.curve);
-        let ForeignGroupField = createForeignField(BigInt(ForeignGroup.curve[2]));
-        return new ForeignGroup(new ForeignGroupField(x), new ForeignGroupField(y));
-    }
+  static zero() {
+    return new ForeignGroup(ForeignField.from(0), ForeignField.from(0));
+  }
 
-    static toFields(g: ForeignGroup) {
-        return g.toFields();
-    }
+  isZero() {
+    // only the zero element can have x = 0, there are no other (valid) group elements with x = 0
+    return this.x.equals(ForeignField.from(0));
+  }
 
-    toFields() {
-        return [this.x.toFields(), this.y.toFields()].flat();
-    }
+  assertEquals(g: ForeignGroup, message?: string) {
+    let { x: x1, y: y1 } = this;
+    let { x: x2, y: y2 } = g;
 
-    static toAuxiliary() {
-        return [];
-    }
+    x1.assertEquals(x2, message);
+    y1.assertEquals(y2, message);
+  }
 
-    static fromFields(fields: Field[]) {
-        let ForeignGroupField = createForeignField(BigInt(ForeignGroup.curve[2]));
-        let [x, y, z, a, b, c] = fields;
-        return new ForeignGroup(
-          ForeignGroupField.fromFields([x, y, z]),
-          ForeignGroupField.fromFields([a, b, c]),
-        );
-    }
+  equals(g: ForeignGroup) {
+    let { x: x1, y: y1 } = this;
+    let { x: x2, y: y2 } = g;
 
-    static sizeInFields() {
-        return 6;
-    }
+    let x_are_equal = x1.equals(x2);
+    let y_are_equal = y1.equals(y2);
 
-    assertValidElement() {
-        this.x.assertValidElement();
-        this.y.assertValidElement();
-    }
+    return x_are_equal.and(y_are_equal);
+  }
 
-    static check(g: ForeignGroup) {
-        g.assertValidElement();
+  add(g: ForeignGroup) {
+    // TODO: Make provable and use foreign EC constraints
+
+    const { x: x1, y: y1 } = this;
+    const { x: x2, y: y2 } = g;
+
+    let inf = Provable.witness(Bool, () =>
+      x1.equals(x2).and(y1.equals(y2).not())
+    );
+
+    let s = Provable.witness(ForeignField, () => {
+      if (x1.equals(x2).toBoolean()) {
+        let x1_squared = x1.mul(x1);
+        return x1_squared.add(x1_squared).add(x1_squared).mul(y1.add(y1).inv());
+      } else return y2.sub(y1).mul(x2.sub(x1).inv());
+    });
+
+    let x3 = Provable.witness(ForeignField, () => {
+      return s.mul(s).sub(x1.add(x2));
+    });
+
+    let y3 = Provable.witness(ForeignField, () => {
+      return s.mul(x1.sub(x3)).sub(y1);
+    });
+
+    // similarly to the constant implementation, we check if either operand is zero
+    // and the implementation above (original OCaml implementation) returns something wild -> g + 0 != g where it should be g + 0 = g
+    let gIsZero = g.isZero();
+    let thisIsZero = this.isZero();
+
+    let bothZero = gIsZero.and(thisIsZero);
+
+    let onlyGisZero = gIsZero.and(thisIsZero.not());
+    let onlyThisIsZero = thisIsZero.and(gIsZero.not());
+
+    let isNegation = inf;
+
+    let isNewElement = bothZero
+      .not()
+      .and(isNegation.not())
+      .and(onlyThisIsZero.not())
+      .and(onlyGisZero.not());
+
+    const zero_g = ForeignGroup.zero();
+
+    return Provable.switch(
+      [bothZero, onlyGisZero, onlyThisIsZero, isNegation, isNewElement],
+      ForeignGroup,
+      [zero_g, this, g, zero_g, new ForeignGroup(x3, y3)]
+    );
+  }
+
+  static sizeInFields() {
+    return ForeignField.sizeInFields() * 2;
+  }
+
+  static fromFields(fields: Field[]) {
+    let x = fields.slice(0, 3);
+    let y = fields.slice(3);
+
+    return new ForeignGroup(ForeignField.fromFields(x), ForeignField.fromFields(y));
+  }
+
+  toFields() {
+    return [...this.x.toFields(), ...this.y.toFields()];
+  }
+
+  static toFields(g: ForeignGroup) {
+    return g.toFields();
+  }
+
+  static toAuxiliary() {
+    return [];
+  }
+
+  static check(g: ForeignGroup) {
+    try {
+      const a = 0n;
+      const b = 5n;
+      const { x, y } = g;
+
+      let x2 = x.mul(x);
+      let x3 = x2.mul(x);
+      let ax = x.mul(a); // this will obviously be 0, but just for the sake of correctness
+
+      // we also check the zero element (0, 0) here
+      let isZero = x.equals(0).and(y.equals(0));
+
+      isZero.or(x3.add(ax).add(b).equals(y.mul(y))).assertTrue();
+    } catch (error) {
+      if (!(error instanceof Error)) return error;
+      throw `${`Element (x: ${g.x}, y: ${g.y}) is not an element of the group.`}\n${error.message}`;
     }
+  }
 }
