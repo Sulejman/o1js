@@ -1,5 +1,6 @@
 import { Snarky } from '../snarky.js';
 import { ForeignAffine, ForeignField, ForeignFieldVar, createForeignField } from './foreign-field.js';
+import { Field } from "./field.js";
 
 export { EllipticCurve, ForeignGroup }
 
@@ -18,10 +19,42 @@ class ForeignGroup {
     add(other: ForeignGroup) {
         let left: ForeignAffine = [this.x.value, this.y.value];
         let right: ForeignAffine = [other.x.value, other.y.value];
-        let result = Snarky.foreignGroup.add(left, right, ForeignGroup.curve);
-        let modulus = BigInt(ForeignGroup.curve[2]);
-        let ForeignGroupField = createForeignField(modulus);
+        let [x, y] = Snarky.foreignGroup.add(left, right, ForeignGroup.curve);
+        let ForeignGroupField = createForeignField(BigInt(ForeignGroup.curve[2]));
+        return new ForeignGroup(new ForeignGroupField(x), new ForeignGroupField(y));
+    }
 
-        return new ForeignGroup(new ForeignGroupField(result[0]), new ForeignGroupField(result[1]));
+    static toFields(g: ForeignGroup) {
+        return g.toFields();
+    }
+
+    toFields() {
+        return [this.x.toFields(), this.y.toFields()].flat();
+    }
+
+    static toAuxiliary() {
+        return [];
+    }
+
+    static fromFields(fields: Field[]) {
+        let ForeignGroupField = createForeignField(BigInt(ForeignGroup.curve[2]));
+        let [x, y, z, a, b, c] = fields;
+        return new ForeignGroup(
+          ForeignGroupField.fromFields([x, y, z]),
+          ForeignGroupField.fromFields([a, b, c]),
+        );
+    }
+
+    static sizeInFields() {
+        return 6;
+    }
+
+    assertValidElement() {
+        this.x.assertValidElement();
+        this.y.assertValidElement();
+    }
+
+    static check(g: ForeignGroup) {
+        g.assertValidElement();
     }
 }
